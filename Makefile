@@ -10,7 +10,7 @@ sync:
 	uv sync --group dev
 
 dev:
-	uv run uvicorn server:app --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn server:app --reload --host 0.0.0.0 --port 8000 --reload
 
 run:
 	uv run uvicorn server:app --host 0.0.0.0 --port 8000
