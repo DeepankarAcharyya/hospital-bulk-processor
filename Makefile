@@ -1,4 +1,4 @@
-.PHONY: install install-dev sync dev run test lint format clean
+.PHONY: install install-dev sync dev run test lint format clean docker-build docker-up docker-down
 
 install:
 	uv sync --no-dev
@@ -28,3 +28,12 @@ clean:
 	rm -rf .venv __pycache__ .pytest_cache dist
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type f -name "*.pyc" -delete
+
+docker-build:
+	docker compose build
+
+docker-up:
+	docker compose up
+
+docker-down:
+	docker compose down
