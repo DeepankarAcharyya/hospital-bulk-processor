@@ -4,7 +4,5 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - HOSPITALS_API_URL=${HOSPITALS_API_URL}
-    env_file:
-      - .env
+      - HOSPITALS_API_URL=https://hospital-directory.onrender.com
     restart: unless-stopped

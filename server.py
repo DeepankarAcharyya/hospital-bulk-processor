@@ -72,7 +72,7 @@ async def bulk_create_hospitals(request: Request, file: UploadFile = File(...)):
     results: list[HospitalResult] = []
     failed = 0
 
-    async with httpx.AsyncClient(base_url=HOSPITALS_API_URL) as client:
+    async with httpx.AsyncClient(base_url=HOSPITALS_API_URL, timeout=30.0) as client:
         for row, hospital in enumerate(hospitals, start=1):
             try:
                 result = await create_hospital(client, hospital, batch_id, row)
@@ -83,7 +83,7 @@ async def bulk_create_hospitals(request: Request, file: UploadFile = File(...)):
                     "hospital_create_failed",
                     row=row,
                     name=hospital.name,
-                    error=str(e),
+                    error=repr(e),
                 )
                 results.append(HospitalResult(
                     row=row,

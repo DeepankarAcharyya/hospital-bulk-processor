@@ -8,8 +8,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy dependency files first for layer caching
 COPY pyproject.toml uv.lock* ./
 
-# Install prod deps only, directly into system Python (no venv needed in container)
-RUN uv sync --no-dev --no-editable --system
+# Create venv and install prod deps
+RUN uv venv /app/.venv && \
+    uv sync --no-dev --no-editable --python /app/.venv/bin/python
+
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy application code
 COPY internal/ ./internal/
