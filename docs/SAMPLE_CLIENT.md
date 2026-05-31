@@ -87,6 +87,8 @@ The upload response uses the same batch state shape as progress polling:
 }
 ```
 
+`POST /hospitals/bulk` returns immediately with `202 Accepted` and initial progress, not the final completed result. The final comprehensive result is available through the progress endpoint after the worker finishes. This matches an async bulk-processing design, but if an assignment expects the upload request itself to block until all hospitals are activated, then this is not an exact match.
+
 The sample client handles that automatically by polling:
 
 ```http

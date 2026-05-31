@@ -22,6 +22,18 @@ Recommended settings:
 | Health Check Path | `/` |
 | Port | `8000` |
 
+## Deployment Pipeline
+
+Deployment is gated by the GitHub Actions test job.
+
+Pull requests into `main` or `deployed` run the test workflow. Pushes to the `deployed` branch run the deployment workflow, which first installs dependencies and runs:
+
+```bash
+uv run pytest
+```
+
+The Render deployment is triggered only after those tests pass. The deploy job depends on the test job and calls the Render deploy hook through `RENDER_DEPLOY_HOOK_URL` only on a successful test result.
+
 ## Source Folder
 
 The `Dockerfile` expects these files and folders at the build context root:

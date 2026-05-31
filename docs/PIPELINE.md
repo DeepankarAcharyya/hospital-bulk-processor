@@ -81,7 +81,7 @@ Example:
 }
 ```
 
-At this point, the HTTP request is complete, but the batch is still being processed in the background.
+At this point, the HTTP request is complete, but the batch is still being processed in the background. `POST /hospitals/bulk` returns immediately with `202 Accepted` and initial progress, not the final completed result. The final comprehensive result is available through the progress endpoint after the worker finishes. This matches an async bulk-processing design, but if an assignment expects the upload request itself to block until all hospitals are activated, then this is not an exact match.
 
 ## 4. Worker Processes Rows
 

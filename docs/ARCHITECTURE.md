@@ -47,6 +47,8 @@ The API layer exposes four endpoints:
 - `POST /hospitals/batch/{batch_id}/resume`: checks the in-memory state and requeues saved hospital rows when the batch is `failed`.
 - `GET /hospitals/batch/{batch_id}/progress`: returns the current batch state from the in-memory store.
 
+`POST /hospitals/bulk` is intentionally asynchronous. It returns immediately with `202 Accepted` and initial progress, not the final completed result. The final comprehensive result is available through the progress endpoint after the background worker finishes. This matches an async bulk-processing design, but if an assignment expects the upload request itself to block until all hospitals are activated, then this is not an exact match.
+
 The upload endpoint is rate limited to `10/minute` per remote address through `slowapi`.
 
 ## Background Worker
@@ -119,6 +121,8 @@ The application is containerized with the root-level `Dockerfile`. Render builds
 ```bash
 uvicorn server:app --host 0.0.0.0 --port 8000
 ```
+
+Deployment is test-gated through GitHub Actions. A push to the `deployed` branch runs the test job first, and the Render deploy hook is called only after `uv run pytest` completes successfully.
 
 Public URL:
 

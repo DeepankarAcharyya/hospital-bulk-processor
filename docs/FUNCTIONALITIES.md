@@ -34,9 +34,11 @@ Validation behavior:
 
 ## Async Batch Processing
 
-Valid uploads return immediately with a `batch_id` and status code `202`.
+Valid uploads return immediately with `202 Accepted`, a `batch_id`, and initial progress.
 
 The actual hospital creation work runs in a background worker. This keeps the upload request short and gives clients a stable ID for progress polling.
+
+The upload response is not the final completed result. The final comprehensive result is available through `GET /hospitals/batch/{batch_id}/progress` after the worker finishes. This matches an async bulk-processing design, but if an assignment expects the upload request itself to block until all hospitals are activated, then this is not an exact match.
 
 ## Progress Tracking
 

@@ -75,7 +75,7 @@ Example accepted response:
 }
 ```
 
-The endpoint returns `202 Accepted` when the CSV is valid and the batch is queued. The response uses the same batch state shape as the progress endpoint. At this point `processing_time_seconds` is `0` because the worker has not started recording elapsed processing time yet.
+The endpoint returns `202 Accepted` immediately when the CSV is valid and the batch is queued. This is the initial progress state, not the final completed result. The final comprehensive result is available from `GET /hospitals/batch/{batch_id}/progress` after the background worker finishes. This matches an async bulk-processing design, but if an assignment expects the upload request itself to block until all hospitals are activated, then this is not an exact match. At this point `processing_time_seconds` is `0` because the worker has not started recording elapsed processing time yet.
 
 ### Resume Failed Batch
 
@@ -198,6 +198,8 @@ The service is deployed on Render:
 ```text
 https://hospital-bulk-processor-6466.onrender.com
 ```
+
+Deployment is test-gated in GitHub Actions. Pushes to the `deployed` branch run the test job first with `uv run pytest`; Render deployment is triggered only if that test job passes successfully.
 
 Because the `Dockerfile`, `pyproject.toml`, `uv.lock`, `server.py`, and `internal/` directory are all at the repository root, the Render source/root directory should be left blank when the Render service is connected directly to this repository.
 
