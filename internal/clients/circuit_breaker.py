@@ -56,6 +56,7 @@ class CircuitBreaker:
         if exc_type is not None and _is_transient(exc_type, exc_val):
             self._last_failure_time = time.monotonic()
             if self._state == _State.HALF_OPEN:
+                self._failure_count = 0
                 self._state = _State.OPEN
             else:  # CLOSED
                 self._failure_count += 1
