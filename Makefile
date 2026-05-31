@@ -1,4 +1,4 @@
-.PHONY: install install-dev sync dev run test lint format clean
+.PHONY: install install-dev sync dev run test lint format clean docker-build docker-up docker-down
 
 install:
 	uv sync --no-dev
@@ -10,7 +10,7 @@ sync:
 	uv sync --group dev
 
 dev:
-	uv run uvicorn server:app --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn server:app --reload --host 0.0.0.0 --port 8000 --reload
 
 run:
 	uv run uvicorn server:app --host 0.0.0.0 --port 8000
@@ -28,3 +28,12 @@ clean:
 	rm -rf .venv __pycache__ .pytest_cache dist
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type f -name "*.pyc" -delete
+
+docker-build:
+	docker compose build
+
+docker-up:
+	docker compose up
+
+docker-down:
+	docker compose down

@@ -1,0 +1,8 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - HOSPITALS_API_URL=https://hospital-directory.onrender.com
+    restart: unless-stopped
