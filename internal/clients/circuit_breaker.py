@@ -54,8 +54,15 @@ class CircuitBreaker:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
         if exc_type is not None and _is_transient(exc_type, exc_val):
-            self._failure_count += 1
             self._last_failure_time = time.monotonic()
-            if self._failure_count >= self._failure_threshold:
+            if self._state == _State.HALF_OPEN:
                 self._state = _State.OPEN
+            else:  # CLOSED
+                self._failure_count += 1
+                if self._failure_count >= self._failure_threshold:
+                    self._state = _State.OPEN
+        elif exc_type is None and self._state == _State.HALF_OPEN:
+            self._state = _State.CLOSED
+            self._failure_count = 0
+            self._last_failure_time = None
         return False

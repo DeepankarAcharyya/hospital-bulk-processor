@@ -117,3 +117,76 @@ class TestCircuitBreakerOpen:
                 async with breaker:
                     pass
         assert exc_info.value.retry_after >= 0.0
+
+
+class TestCircuitBreakerHalfOpen:
+    async def test_transitions_to_half_open_after_timeout(self):
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=30.0)
+        with patch("internal.clients.circuit_breaker.time") as mock_time:
+            mock_time.monotonic.return_value = 0.0
+            with pytest.raises(httpx.ConnectError):
+                async with breaker:
+                    raise httpx.ConnectError("down")
+            mock_time.monotonic.return_value = 31.0
+            async with breaker:
+                assert breaker.state == "half_open"
+
+    async def test_half_open_success_closes_circuit(self):
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=30.0)
+        with patch("internal.clients.circuit_breaker.time") as mock_time:
+            mock_time.monotonic.return_value = 0.0
+            with pytest.raises(httpx.ConnectError):
+                async with breaker:
+                    raise httpx.ConnectError("down")
+            mock_time.monotonic.return_value = 31.0
+            async with breaker:
+                pass
+        assert breaker.state == "closed"
+
+    async def test_half_open_success_resets_failure_count(self):
+        breaker = CircuitBreaker(failure_threshold=2, recovery_timeout=30.0)
+        with patch("internal.clients.circuit_breaker.time") as mock_time:
+            mock_time.monotonic.return_value = 0.0
+            for _ in range(2):
+                with pytest.raises(httpx.ConnectError):
+                    async with breaker:
+                        raise httpx.ConnectError("down")
+            mock_time.monotonic.return_value = 31.0
+            async with breaker:
+                pass  # probe succeeds → CLOSED, count reset to 0
+        # one more failure should NOT reopen (threshold=2, count was reset)
+        with pytest.raises(httpx.ConnectError):
+            async with breaker:
+                raise httpx.ConnectError("one failure")
+        assert breaker.state == "closed"
+
+    async def test_half_open_failure_reopens_circuit(self):
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=30.0)
+        with patch("internal.clients.circuit_breaker.time") as mock_time:
+            mock_time.monotonic.return_value = 0.0
+            with pytest.raises(httpx.ConnectError):
+                async with breaker:
+                    raise httpx.ConnectError("down")
+            mock_time.monotonic.return_value = 31.0
+            with pytest.raises(httpx.ConnectError):
+                async with breaker:
+                    raise httpx.ConnectError("still down")
+        assert breaker.state == "open"
+
+    async def test_half_open_fatal_error_stays_half_open(self):
+        """Fatal errors don't change circuit state — circuit only tracks availability."""
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=30.0)
+        with patch("internal.clients.circuit_breaker.time") as mock_time:
+            mock_time.monotonic.return_value = 0.0
+            with pytest.raises(httpx.ConnectError):
+                async with breaker:
+                    raise httpx.ConnectError("down")
+            mock_time.monotonic.return_value = 31.0
+            with pytest.raises(httpx.HTTPStatusError):
+                async with breaker:
+                    raise httpx.HTTPStatusError(
+                        "422 Unprocessable",
+                        request=httpx.Request("POST", "http://test"),
+                        response=httpx.Response(422),
+                    )
+        assert breaker.state == "half_open"  # neither closed (no success) nor open (not transient)
