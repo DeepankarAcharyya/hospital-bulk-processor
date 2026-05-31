@@ -1,14 +1,12 @@
 import asyncio
-import pytest
 import httpx
 import respx
-import time
 from uuid import uuid4
 from unittest.mock import AsyncMock, patch
 
 from internal.models.batch import BatchState, BatchStatus
 from internal.store.in_memory import InMemoryStore
-from internal.clients.circuit_breaker import CircuitBreaker, CircuitOpenError
+from internal.clients.circuit_breaker import CircuitBreaker
 from internal.models.hospital import Hospital
 
 

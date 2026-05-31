@@ -4,6 +4,7 @@
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -18,7 +19,8 @@ def check_health(client: httpx.Client) -> None:
     print(f"[health] {resp.json()}")
 
 
-def bulk_upload(client: httpx.Client, csv_path: Path) -> dict:
+def bulk_upload(client: httpx.Client, csv_path: Path) -> str:
+    """POST CSV and return batch_id."""
     with open(csv_path, "rb") as f:
         resp = client.post(
             "/hospitals/bulk",
@@ -29,30 +31,40 @@ def bulk_upload(client: httpx.Client, csv_path: Path) -> dict:
     data = resp.json()
 
     if resp.status_code == 422:
-        print(f"[validation errors]")
+        print("[validation errors]")
         for err in data.get("errors", []):
             print(f"  row {err['row']}: {err['error']}")
         sys.exit(1)
 
     resp.raise_for_status()
-    return data
+    return data["batch_id"]
+
+
+def poll_progress(client: httpx.Client, batch_id: str, poll_interval: float = 1.0) -> dict:
+    """Poll GET /hospitals/batch/{batch_id}/progress until terminal state."""
+    terminal = {"completed", "failed"}
+    while True:
+        resp = client.get(f"/hospitals/batch/{batch_id}/progress")
+        resp.raise_for_status()
+        data = resp.json()
+        status = data["status"]
+        print(f"  [{status}] processed={data['processed_hospitals']}/{data['total_hospitals']} failed={data['failed_hospitals']}")
+        if status in terminal:
+            return data
+        time.sleep(poll_interval)
 
 
 def print_results(data: dict) -> None:
     print(f"\n{'='*50}")
     print(f"batch_id          : {data['batch_id']}")
+    print(f"status            : {data['status']}")
     print(f"total_hospitals   : {data['total_hospitals']}")
     print(f"processed         : {data['processed_hospitals']}")
     print(f"failed            : {data['failed_hospitals']}")
     print(f"batch_activated   : {data['batch_activated']}")
-    print(f"processing_time   : {data['processing_time_seconds']}s")
-    print(f"{'='*50}")
-
-    for h in data.get("hospitals", []):
-        status_icon = "✓" if "activated" in h["status"] else ("✗" if h["status"] == "failed" else "·")
-        print(f"  {status_icon} row {h['row']:>2} | id={h['hospital_id']:<6} | {h['status']:<24} | {h['name']}")
-
-    print()
+    if data.get("error_message"):
+        print(f"error             : {data['error_message']}")
+    print(f"{'='*50}\n")
 
 
 def main():
@@ -75,7 +87,10 @@ def main():
         check_health(client)
 
         print(f"\n[uploading] {args.csv} → {args.url}/hospitals/bulk")
-        data = bulk_upload(client, args.csv)
+        batch_id = bulk_upload(client, args.csv)
+        print(f"[accepted] batch_id={batch_id}\n[polling]")
+
+        data = poll_progress(client, batch_id)
 
         if args.json:
             print(json.dumps(data, indent=2))

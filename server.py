@@ -16,7 +16,6 @@ from internal.clients.circuit_breaker import CircuitBreaker, CircuitOpenError
 from internal.clients.hospital_client import create_hospital, activate_batch
 from internal.logging_config import configure_logging
 from internal.models.batch import BatchState, BatchStatus
-from internal.models.bulk_response import HospitalResult
 from internal.store.in_memory import InMemoryStore
 from internal.validation.csv import parse_and_validate_csv, CSVValidationError
 
@@ -39,7 +38,6 @@ async def process_batch_job(
 ) -> None:
     store.update(batch_id, status=BatchStatus.PROCESSING)
     failed = 0
-    results = []
 
     async with httpx.AsyncClient(base_url=HOSPITALS_API_URL, timeout=30.0) as client:
         for row, hospital in enumerate(hospitals, start=1):
@@ -49,8 +47,7 @@ async def process_batch_job(
                 try:
                     async with create_breaker:
                         async with api_lock:
-                            result = await create_hospital(client, hospital, uuid.UUID(batch_id), row)
-                    results.append(result)
+                            await create_hospital(client, hospital, uuid.UUID(batch_id), row)
                     success = True
                     break
                 except CircuitOpenError as e:
@@ -77,7 +74,6 @@ async def process_batch_job(
             if not success:
                 failed += 1
                 log.error("create_exhausted_retries", batch_id=batch_id, row=row, name=hospital.name)
-                results.append(HospitalResult(row=row, hospital_id=0, name=hospital.name, status="failed"))
 
             store.update(
                 batch_id,
@@ -92,7 +88,6 @@ async def process_batch_job(
                 async with activate_breaker:
                     async with api_lock:
                         batch_activated = await activate_batch(client, uuid.UUID(batch_id))
-                results = [r.model_copy(update={"status": "created_and_activated"}) for r in results]
             except CircuitOpenError as e:
                 log.error("activate_circuit_open", batch_id=batch_id, retry_after=e.retry_after)
                 store.update(batch_id, status=BatchStatus.FAILED, error_message="Activation circuit open")

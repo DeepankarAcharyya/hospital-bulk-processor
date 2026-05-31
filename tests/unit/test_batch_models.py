@@ -1,4 +1,3 @@
-import pytest
 from internal.models.batch import BatchState, BatchStatus
 
 
