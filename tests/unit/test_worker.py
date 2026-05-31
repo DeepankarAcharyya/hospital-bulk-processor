@@ -2,6 +2,7 @@ import asyncio
 import pytest
 import httpx
 import respx
+import time
 from uuid import uuid4
 from unittest.mock import AsyncMock, patch
 
@@ -73,7 +74,18 @@ async def test_retries_six_times_then_continues(respx_mock):
     # but reset per-row, so second row has fresh attempt counter
     hospitals = [_make_hospital("fail"), _make_hospital("ok")]
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
+    # Mock both asyncio.sleep (to skip waits) and time.monotonic (to advance time for circuit breaker)
+    monotonic_time = [0.0]  # use list to allow mutation in nested function
+
+    def mock_monotonic():
+        return monotonic_time[0]
+
+    async def mock_sleep(duration):
+        monotonic_time[0] += duration
+
+    with patch("asyncio.sleep", new_callable=AsyncMock, side_effect=mock_sleep), \
+         patch("server.time.monotonic", side_effect=mock_monotonic), \
+         patch("internal.clients.circuit_breaker.time.monotonic", side_effect=mock_monotonic):
         bid = await _run_worker_once(store, hospitals)
     state = store.get(bid)
     assert state.failed_hospitals == 1

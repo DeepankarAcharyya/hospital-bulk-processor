@@ -81,13 +81,6 @@ async def process_batch_job(
                     store.update(batch_id, status=BatchStatus.COOLDOWN)
                     log.warning("create_circuit_open", batch_id=batch_id, row=row, attempt=attempt, retry_after=e.retry_after)
                     await asyncio.sleep(e.retry_after)
-                    # After waiting retry_after seconds, allow the circuit to probe again.
-                    # In production, real time has passed; in tests with mocked sleep we
-                    # backdate _last_failure_time so the breaker transitions to HALF_OPEN.
-                    if create_breaker._last_failure_time is not None:
-                        create_breaker._last_failure_time = (
-                            time.monotonic() - create_breaker._recovery_timeout - 1.0
-                        )
                     attempt += 1
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code in (400, 422):
