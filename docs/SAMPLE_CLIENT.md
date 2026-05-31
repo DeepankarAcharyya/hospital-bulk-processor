@@ -59,16 +59,31 @@ Expected flow:
 [uploading] test_client/hospitals.csv -> https://hospital-bulk-processor-6466.onrender.com/hospitals/bulk
 [accepted] batch_id=f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2
 [polling]
-  [accepted] processed=0/5 failed=0
-  [processing] processed=3/5 failed=0
-  [completed] processed=5/5 failed=0
+  [accepted] processed=0/5 failed=0 elapsed=0s
+  [processing] processed=3/5 failed=0 elapsed=42.7s
+  [created_and_activated] processed=5/5 failed=0 elapsed=250s
 ```
 
-The upload response contains only the `batch_id`:
+The upload response uses the same batch state shape as progress polling:
 
 ```json
 {
-  "batch_id": "f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2"
+  "batch_id": "f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2",
+  "status": "accepted",
+  "total_hospitals": 5,
+  "processed_hospitals": 0,
+  "failed_hospitals": 0,
+  "processing_time_seconds": 0,
+  "batch_activated": false,
+  "hospitals": [
+    {
+      "row": 1,
+      "hospital_id": null,
+      "name": "City General Hospital",
+      "status": "accepted"
+    }
+  ],
+  "error_message": null
 }
 ```
 
@@ -77,6 +92,8 @@ The sample client handles that automatically by polling:
 ```http
 GET /hospitals/batch/{batch_id}/progress
 ```
+
+The `elapsed=...s` value printed during polling comes from `processing_time_seconds`. It is the last elapsed worker time stored by the API, not a timer calculated by the client.
 
 ## Run Against Local Service
 
@@ -135,12 +152,12 @@ Expected flow when the batch is failed and can be requeued:
 [resume] Batch resume accepted
 
 [polling] batch_id=f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2
-  [accepted] processed=0/5 failed=0
-  [processing] processed=2/5 failed=0
-  [completed] processed=5/5 failed=0
+  [accepted] processed=0/5 failed=0 elapsed=0s
+  [processing] processed=2/5 failed=0 elapsed=18.4s
+  [created_and_activated] processed=5/5 failed=0 elapsed=250s
 ```
 
-If the batch is already `completed`, the resume endpoint returns success and the client still polls the final progress state. If the batch is currently `accepted`, `processing`, or `cooldown`, the client prints an error because active batches cannot be resumed.
+If the batch is already `completed`, the resume endpoint returns success and the client still polls the final progress state. If the batch is currently `accepted`, `processing`, `created`, or `cooldown`, the client prints an error because active batches cannot be resumed. When a failed batch is accepted for resume, the API resets `processing_time_seconds` to `0` before the worker starts again.
 
 ## Print Raw Final JSON
 
@@ -169,11 +186,20 @@ Example completed response:
 ```json
 {
   "batch_id": "f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2",
-  "status": "completed",
+  "status": "created_and_activated",
   "total_hospitals": 5,
   "processed_hospitals": 5,
   "failed_hospitals": 0,
+  "processing_time_seconds": 250,
   "batch_activated": true,
+  "hospitals": [
+    {
+      "row": 1,
+      "hospital_id": 101,
+      "name": "General Hospital",
+      "status": "created_and_activated"
+    }
+  ],
   "error_message": null
 }
 ```
@@ -215,7 +241,7 @@ Example:
 
 The client polls every `2` seconds by default. It stops when the batch status is either:
 
-- `completed`
+- `created_and_activated`
 - `failed`
 
 If the service reports `cooldown`, the client keeps polling and annotates the line as circuit breaker cooldown.

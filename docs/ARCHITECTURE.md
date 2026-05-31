@@ -31,7 +31,7 @@ Activated hospital records
 - `internal/validation/csv.py`: CSV parsing, header validation, row validation, and maximum row enforcement.
 - `internal/models/hospital.py`: Pydantic model for hospital records.
 - `internal/models/batch.py`: Batch status and progress state model.
-- `internal/models/bulk_response.py`: Legacy response/result models returned by the hospital client helper. The current worker does not retain per-row result objects in batch state.
+- `internal/models/bulk_response.py`: Per-row hospital result models used in batch state responses.
 - `internal/clients/hospital_client.py`: HTTP client helpers for the upstream hospital API.
 - `internal/clients/circuit_breaker.py`: Circuit breaker implementation for transient downstream failures.
 - `internal/store/in_memory.py`: In-memory batch progress store.
@@ -57,15 +57,18 @@ For each queued batch, the worker:
 
 1. Marks the batch as `processing`.
 2. Creates each hospital through the upstream API.
-3. Updates aggregate progress counters after each row.
-4. Activates the upstream batch if all creates succeed.
-5. Marks the batch as `completed` or `failed`.
+3. Updates the current row result and aggregate progress counters after each row.
+4. Marks the batch as `created` when every hospital has been created successfully.
+5. Activates the upstream batch if all creates succeed.
+6. Marks the batch as `created_and_activated` or `failed`.
 
 Only one worker loop is defined, so batch processing is serialized inside the process.
 
-The performance-optimized worker does not store per-hospital results. It tracks aggregate progress through `processed_hospitals`, `failed_hospitals`, `status`, `batch_activated`, and `error_message`.
+The worker stores per-hospital result objects in batch state. Each row starts as `accepted`, moves through `processing`, then becomes `created`, `failed`, or `created_and_activated`.
 
-The API also keeps the parsed hospital payload in memory by `batch_id` so failed batches can be requeued by the resume endpoint. Like progress state, this payload is not durable across process restarts.
+Those stored row objects also retain the raw `address` and `phone` values needed to rebuild queue items when a failed batch is resumed. API responses omit those raw fields and return only the public row result fields.
+
+The worker also records `processing_time_seconds` as elapsed worker time for the current attempt. It starts at `0`, advances when the worker saves progress, and is reset to `0` when a failed batch is requeued for resume.
 
 ## Resilience
 
@@ -89,12 +92,25 @@ Batch state is stored in memory:
   "total_hospitals": 5,
   "processed_hospitals": 0,
   "failed_hospitals": 0,
+  "processing_time_seconds": 0,
   "batch_activated": false,
+  "hospitals": [
+    {
+      "row": 1,
+      "hospital_id": null,
+      "name": "General Hospital",
+      "status": "accepted"
+    }
+  ],
   "error_message": null
 }
 ```
 
 Because the store is in memory, progress state is not durable across process restarts or redeploys.
+
+Stored row state also includes raw `address` and `phone` values for resume, but those fields are excluded from bulk and progress responses.
+
+Progress responses return the stored `processing_time_seconds` value. The progress endpoint does not calculate a live duration on each request.
 
 ## Deployment Shape
 

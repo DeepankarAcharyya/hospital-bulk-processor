@@ -25,12 +25,37 @@ class TestBulkCreateHospitals:
         response = client.post("/hospitals/bulk", files=upload_csv(valid_csv(2)))
         assert "batch_id" in response.json()
 
+    def test_valid_csv_response_has_batch_state_shape(self, client):
+        response = client.post("/hospitals/bulk", files=upload_csv(valid_csv(2)))
+
+        data = response.json()
+        assert data["status"] == "accepted"
+        assert data["total_hospitals"] == 2
+        assert data["processed_hospitals"] == 0
+        assert data["failed_hospitals"] == 0
+        assert data["processing_time_seconds"] == 0
+        assert data["batch_activated"] is False
+        assert data["hospitals"] == [
+            {
+                "row": 1,
+                "hospital_id": None,
+                "name": "Hospital 1",
+                "status": "accepted",
+            },
+            {
+                "row": 2,
+                "hospital_id": None,
+                "name": "Hospital 2",
+                "status": "accepted",
+            },
+        ]
+
     def test_valid_csv_batch_id_is_uuid(self, client):
         response = client.post("/hospitals/bulk", files=upload_csv(valid_csv(1)))
         batch_id = response.json()["batch_id"]
         uuid.UUID(batch_id)  # raises if invalid
 
-    def test_valid_csv_stores_payload_for_resume(self, client, monkeypatch):
+    def test_valid_csv_stores_raw_payload_in_batch_state_for_resume(self, client, monkeypatch):
         import server
 
         fake_queue = FakeQueue()
@@ -39,11 +64,18 @@ class TestBulkCreateHospitals:
         response = client.post("/hospitals/bulk", files=upload_csv(valid_csv(2)))
 
         batch_id = response.json()["batch_id"]
-        assert [hospital.name for hospital in server.batch_payloads[batch_id]] == [
-            "Hospital 1",
-            "Hospital 2",
-        ]
-        assert fake_queue.items == [(batch_id, server.batch_payloads[batch_id])]
+        assert not hasattr(server, "batch_payloads")
+
+        state = server.store.get(batch_id)
+        assert state.hospitals[0].name == "Hospital 1"
+        assert state.hospitals[0].address == "123 Main St 1"
+        assert state.hospitals[0].phone == "555-0001"
+
+        queued_batch_id, queued_hospitals = fake_queue.items[0]
+        assert queued_batch_id == batch_id
+        assert [hospital.name for hospital in queued_hospitals] == ["Hospital 1", "Hospital 2"]
+        assert queued_hospitals[0].address == "123 Main St 1"
+        assert queued_hospitals[0].phone == "555-0001"
 
     def test_invalid_content_type_returns_400(self, client):
         response = client.post(

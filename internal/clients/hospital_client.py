@@ -29,6 +29,8 @@ async def create_hospital(
         row=row,
         hospital_id=data["id"],
         name=hospital.name,
+        address=hospital.address,
+        phone=hospital.phone,
         status="created",
     )
 

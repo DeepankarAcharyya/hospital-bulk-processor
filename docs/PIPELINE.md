@@ -62,7 +62,22 @@ Example:
 
 ```json
 {
-  "batch_id": "f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2"
+  "batch_id": "f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2",
+  "status": "accepted",
+  "total_hospitals": 2,
+  "processed_hospitals": 0,
+  "failed_hospitals": 0,
+  "processing_time_seconds": 0,
+  "batch_activated": false,
+  "hospitals": [
+    {
+      "row": 1,
+      "hospital_id": null,
+      "name": "General Hospital",
+      "status": "accepted"
+    }
+  ],
+  "error_message": null
 }
 ```
 
@@ -96,9 +111,13 @@ After each row, the worker updates:
 
 - `processed_hospitals`
 - `failed_hospitals`
+- `processing_time_seconds`
 - `status`
+- `hospitals`
 
-The worker does not store per-row result objects in the progress response. Progress is intentionally aggregate-only.
+The worker stores one row result per parsed hospital. A row starts as `accepted`, moves to `processing`, and becomes `created` after the upstream create call returns a hospital ID. Failed rows are marked `failed`.
+
+`processing_time_seconds` is measured from the moment the worker begins processing the batch. It is set to `0` when processing starts, then saved back to `InMemoryStore` after row updates, failure paths, activation, and final completion.
 
 ## 5. Retry And Cooldown Behavior
 
@@ -144,8 +163,9 @@ PATCH /hospitals/batch/{batch_id}/activate
 
 If activation succeeds:
 
-- `status` becomes `completed`.
+- `status` moves from `created` to `created_and_activated`.
 - `batch_activated` becomes `true`.
+- created row results become `created_and_activated`.
 
 If activation fails:
 
@@ -163,11 +183,13 @@ POST /hospitals/batch/{batch_id}/resume
 The endpoint reads the current batch state from memory.
 
 - Unknown batch IDs return `404 Not Found`.
-- `completed` batches return `200 OK` because there is nothing to resume.
+- `created_and_activated` batches return `200 OK` because there is nothing to resume.
 - `failed` batches reset aggregate progress, requeue the saved parsed hospital rows, and return `202 Accepted`.
-- `accepted`, `processing`, and `cooldown` batches return `409 Conflict` because they are already active.
+- `accepted`, `processing`, `created`, and `cooldown` batches return `409 Conflict` because they are already active.
 
-Resume depends on the in-memory parsed hospital payload saved during the original upload. If the process restarts, both progress and resume payload state are lost.
+Resume rebuilds queue items from the raw `address` and `phone` values stored inside the in-memory batch state. Bulk and progress responses exclude those raw fields. If the process restarts, both progress and resume state are lost.
+
+Resume resets `processing_time_seconds` to `0` before requeueing the saved hospital rows. The next worker run records a fresh elapsed time for the resumed attempt.
 
 ## 9. Progress Polling
 
@@ -182,14 +204,25 @@ Example response:
 ```json
 {
   "batch_id": "f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2",
-  "status": "completed",
+  "status": "created_and_activated",
   "total_hospitals": 5,
   "processed_hospitals": 5,
   "failed_hospitals": 0,
+  "processing_time_seconds": 250,
   "batch_activated": true,
+  "hospitals": [
+    {
+      "row": 1,
+      "hospital_id": 101,
+      "name": "General Hospital",
+      "status": "created_and_activated"
+    }
+  ],
   "error_message": null
 }
 ```
+
+`processing_time_seconds` is returned from the stored batch state. The progress endpoint does not calculate a live timer; it reports the latest value written by the worker.
 
 Unknown batch IDs return `404 Not Found`.
 
@@ -199,8 +232,9 @@ Unknown batch IDs return `404 Not Found`.
 | --- | --- |
 | `accepted` | CSV was accepted and queued. |
 | `processing` | Worker is processing hospital rows. |
+| `created` | All hospital rows were created upstream and activation is about to run. |
 | `cooldown` | A circuit breaker is open and the worker is waiting before retrying. |
-| `completed` | All rows were created and the upstream batch was activated. |
+| `created_and_activated` | All rows were created and the upstream batch was activated. |
 | `failed` | The batch failed during row creation or activation. |
 
 ## Important Operational Note

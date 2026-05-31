@@ -5,8 +5,10 @@ from pydantic import BaseModel
 
 class HospitalResult(BaseModel):
     row: int
-    hospital_id: int
+    hospital_id: int | None
     name: str
+    address: str
+    phone: str | None = None
     status: str
 
 
