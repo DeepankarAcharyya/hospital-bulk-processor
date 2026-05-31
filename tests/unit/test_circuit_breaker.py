@@ -67,3 +67,55 @@ class TestCircuitBreakerClosed:
                         response=httpx.Response(429),
                     )
         assert breaker.state == "open"
+
+
+from unittest.mock import patch
+
+
+class TestCircuitBreakerOpen:
+    async def test_open_raises_circuit_open_error(self):
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=30.0)
+        with pytest.raises(httpx.ConnectError):
+            async with breaker:
+                raise httpx.ConnectError("down")
+        assert breaker.state == "open"
+        with pytest.raises(CircuitOpenError):
+            async with breaker:
+                pass
+
+    async def test_open_does_not_execute_body(self):
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=30.0)
+        with pytest.raises(httpx.ConnectError):
+            async with breaker:
+                raise httpx.ConnectError("down")
+        executed = False
+        with pytest.raises(CircuitOpenError):
+            async with breaker:
+                executed = True
+        assert not executed
+
+    async def test_retry_after_is_remaining_timeout(self):
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=30.0)
+        with patch("internal.clients.circuit_breaker.time") as mock_time:
+            mock_time.monotonic.return_value = 100.0
+            with pytest.raises(httpx.ConnectError):
+                async with breaker:
+                    raise httpx.ConnectError("down")
+            mock_time.monotonic.return_value = 110.0  # 10s elapsed
+            with pytest.raises(CircuitOpenError) as exc_info:
+                async with breaker:
+                    pass
+        assert exc_info.value.retry_after == pytest.approx(20.0)  # 30 - 10
+
+    async def test_retry_after_never_negative(self):
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=30.0)
+        with patch("internal.clients.circuit_breaker.time") as mock_time:
+            mock_time.monotonic.return_value = 0.0
+            with pytest.raises(httpx.ConnectError):
+                async with breaker:
+                    raise httpx.ConnectError("down")
+            mock_time.monotonic.return_value = 29.9
+            with pytest.raises(CircuitOpenError) as exc_info:
+                async with breaker:
+                    pass
+        assert exc_info.value.retry_after >= 0.0

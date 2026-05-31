@@ -42,6 +42,13 @@ class CircuitBreaker:
         return self._state.value
 
     async def __aenter__(self) -> None:
+        if self._state == _State.OPEN:
+            elapsed = time.monotonic() - (self._last_failure_time or 0.0)
+            if elapsed >= self._recovery_timeout:
+                self._state = _State.HALF_OPEN
+            else:
+                retry_after = max(0.0, self._recovery_timeout - elapsed)
+                raise CircuitOpenError(retry_after)
         return None
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
