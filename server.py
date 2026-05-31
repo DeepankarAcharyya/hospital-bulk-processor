@@ -77,13 +77,13 @@ async def bulk_create_hospitals(request: Request, file: UploadFile = File(...)):
             try:
                 result = await create_hospital(client, hospital, batch_id, row)
                 results.append(result)
-            except httpx.HTTPStatusError as e:
+            except httpx.HTTPError as e:
                 failed += 1
                 log.error(
                     "hospital_create_failed",
                     row=row,
                     name=hospital.name,
-                    status_code=e.response.status_code,
+                    error=str(e),
                 )
                 results.append(HospitalResult(
                     row=row,
