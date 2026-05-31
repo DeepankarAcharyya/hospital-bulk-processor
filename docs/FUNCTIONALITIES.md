@@ -58,6 +58,20 @@ The progress response includes:
 
 The current progress API reports aggregate batch state. It does not return one result object per hospital row.
 
+## Resume Failed Batches
+
+Clients can request a failed batch to be queued again:
+
+```http
+POST /hospitals/batch/{batch_id}/resume
+```
+
+If the batch is `completed`, the endpoint returns `200 OK` with a success message.
+
+If the batch is `failed`, the endpoint resets aggregate progress, requeues the saved parsed hospital rows, and returns `202 Accepted`.
+
+Unknown batch IDs return `404 Not Found`. Batches that are already `accepted`, `processing`, or `cooldown` return `409 Conflict`.
+
 ## Upstream Hospital Creation
 
 Each CSV row is sent to the configured upstream hospital directory API:
@@ -65,6 +79,8 @@ Each CSV row is sent to the configured upstream hospital directory API:
 ```http
 POST /hospitals/
 ```
+
+Worker row numbers start at `1` in logs and error messages so they read as human-facing record numbers, not Python list indexes.
 
 The service adds the same `creation_batch_id` to every row in a batch so the upstream service can group the records.
 
@@ -139,6 +155,6 @@ The container runs FastAPI through Uvicorn on port `8000`.
 
 The `test_client/client.py` script demonstrates how to upload `test_client/hospitals.csv` to either the deployed service or a local service.
 
-The client uploads the CSV, receives a `batch_id`, polls the progress endpoint until the batch reaches `completed` or `failed`, and then prints the final batch state. It can also poll an existing batch through `--batch-id`.
+The client uploads the CSV, receives a `batch_id`, polls the progress endpoint until the batch reaches `completed` or `failed`, and then prints the final batch state. It can also poll an existing batch through `--batch-id`, or resume a failed batch with `--batch-id <id> --resume`.
 
 See [Sample Client Program](SAMPLE_CLIENT.md).

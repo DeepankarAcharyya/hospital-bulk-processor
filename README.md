@@ -25,7 +25,7 @@ https://hospital-directory.onrender.com
 - Exposes batch progress at `GET /hospitals/batch/{batch_id}/progress`.
 - Tracks aggregate batch progress instead of returning per-row results.
 - Activates the upstream batch only after all rows are created successfully.
-- Includes a sample client that can upload new CSVs or poll an existing batch ID.
+- Includes a sample client that can upload new CSVs, poll an existing batch ID, or resume a failed batch.
 
 ## API Summary
 
@@ -61,6 +61,18 @@ Example accepted response:
 ```
 
 The endpoint returns `202 Accepted` when the CSV is valid and the batch is queued.
+
+### Resume Failed Batch
+
+```http
+POST /hospitals/batch/{batch_id}/resume
+```
+
+If the batch is already `completed`, the endpoint returns `200 OK`.
+
+If the batch is `failed`, the endpoint resets aggregate progress, requeues the saved parsed hospital rows, and returns `202 Accepted`.
+
+Unknown batch IDs return `404 Not Found`. Active batches return `409 Conflict`.
 
 ### Check Batch Progress
 

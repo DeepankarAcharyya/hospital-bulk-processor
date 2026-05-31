@@ -82,6 +82,8 @@ For each hospital row, it calls the upstream hospital directory API:
 POST /hospitals/
 ```
 
+Rows are counted from `1` in worker logs and error messages. These numbers are intended to identify the first, second, third, etc. parsed hospital record for humans, rather than expose Python's zero-based list indexes.
+
 The payload includes the parsed hospital fields plus:
 
 ```json
@@ -150,7 +152,24 @@ If activation fails:
 - `status` becomes `failed`.
 - `error_message` explains the activation failure.
 
-## 8. Progress Polling
+## 8. Resume Failed Batch
+
+Clients can resume a known batch with:
+
+```http
+POST /hospitals/batch/{batch_id}/resume
+```
+
+The endpoint reads the current batch state from memory.
+
+- Unknown batch IDs return `404 Not Found`.
+- `completed` batches return `200 OK` because there is nothing to resume.
+- `failed` batches reset aggregate progress, requeue the saved parsed hospital rows, and return `202 Accepted`.
+- `accepted`, `processing`, and `cooldown` batches return `409 Conflict` because they are already active.
+
+Resume depends on the in-memory parsed hospital payload saved during the original upload. If the process restarts, both progress and resume payload state are lost.
+
+## 9. Progress Polling
 
 Clients can poll:
 

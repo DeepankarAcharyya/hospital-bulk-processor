@@ -112,3 +112,9 @@ uv run python test_client/client.py
 ```
 
 The client should print an accepted `batch_id`, poll progress, and end with either `completed` or `failed`.
+
+Resume a failed batch by ID:
+
+```bash
+uv run python test_client/client.py --batch-id {batch_id} --resume
+```

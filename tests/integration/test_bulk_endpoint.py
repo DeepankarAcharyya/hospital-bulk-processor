@@ -4,6 +4,14 @@ import io
 from tests.conftest import valid_csv, make_csv
 
 
+class FakeQueue:
+    def __init__(self) -> None:
+        self.items = []
+
+    async def put(self, item):
+        self.items.append(item)
+
+
 def upload_csv(content: bytes, content_type: str = "text/csv"):
     return {"file": ("hospitals.csv", io.BytesIO(content), content_type)}
 
@@ -21,6 +29,21 @@ class TestBulkCreateHospitals:
         response = client.post("/hospitals/bulk", files=upload_csv(valid_csv(1)))
         batch_id = response.json()["batch_id"]
         uuid.UUID(batch_id)  # raises if invalid
+
+    def test_valid_csv_stores_payload_for_resume(self, client, monkeypatch):
+        import server
+
+        fake_queue = FakeQueue()
+        monkeypatch.setattr(server, "job_queue", fake_queue)
+
+        response = client.post("/hospitals/bulk", files=upload_csv(valid_csv(2)))
+
+        batch_id = response.json()["batch_id"]
+        assert [hospital.name for hospital in server.batch_payloads[batch_id]] == [
+            "Hospital 1",
+            "Hospital 2",
+        ]
+        assert fake_queue.items == [(batch_id, server.batch_payloads[batch_id])]
 
     def test_invalid_content_type_returns_400(self, client):
         response = client.post(

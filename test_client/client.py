@@ -58,6 +58,24 @@ def poll_progress(client: httpx.Client, batch_id: str, poll_interval: float = 2.
         time.sleep(poll_interval)
 
 
+def resume_batch(client: httpx.Client, batch_id: str) -> dict:
+    """POST resume request for an existing batch."""
+    resp = client.post(f"/hospitals/batch/{batch_id}/resume", timeout=60)
+    data = resp.json()
+
+    if resp.status_code == 404:
+        print(f"[error] batch_id={batch_id} not found")
+        sys.exit(1)
+
+    if resp.status_code == 409:
+        print(f"[error] batch_id={batch_id} is already active")
+        sys.exit(1)
+
+    resp.raise_for_status()
+    print(f"[resume] {data['message']}")
+    return data
+
+
 def print_results(data: dict) -> None:
     print(f"\n{'='*50}")
     print(f"batch_id          : {data['batch_id']}")
@@ -85,6 +103,11 @@ def main():
         help="Poll an existing batch by ID (skips upload)",
     )
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume --batch-id before polling. Only failed batches are requeued.",
+    )
+    parser.add_argument(
         "--poll-interval",
         type=float,
         default=2.0,
@@ -93,10 +116,16 @@ def main():
     parser.add_argument("--json", action="store_true", help="Print raw JSON response")
     args = parser.parse_args()
 
+    if args.resume and not args.batch_id:
+        parser.error("--resume requires --batch-id")
+
     with httpx.Client(base_url=args.url) as client:
         check_health(client)
 
         if args.batch_id:
+            if args.resume:
+                print(f"\n[resuming] batch_id={args.batch_id}")
+                resume_batch(client, args.batch_id)
             print(f"\n[polling] batch_id={args.batch_id}")
             data = poll_progress(client, args.batch_id, poll_interval=args.poll_interval)
         else:

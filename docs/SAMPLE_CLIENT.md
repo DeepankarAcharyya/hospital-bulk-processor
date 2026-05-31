@@ -6,7 +6,7 @@ The repository includes a simple Python client:
 test_client/client.py
 ```
 
-It uploads a CSV file to the bulk processor API using `httpx`, then polls the progress endpoint until the batch reaches a terminal state.
+It uploads a CSV file to the bulk processor API using `httpx`, polls the progress endpoint until the batch reaches a terminal state, and can resume a failed batch by ID.
 
 ## Default Target
 
@@ -25,6 +25,7 @@ To target a local server, pass `--url`.
 | `--url` | Override the API base URL. |
 | `--csv` | Upload a custom CSV file. |
 | `--batch-id` | Poll an existing batch without uploading a new CSV. |
+| `--resume` | Resume `--batch-id` before polling. Only failed batches are requeued. |
 | `--poll-interval` | Set seconds between progress polls. Default: `2.0`. |
 | `--json` | Print the final progress response as JSON. |
 
@@ -117,6 +118,30 @@ With a custom polling interval:
 uv run python test_client/client.py --batch-id f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2 --poll-interval 5
 ```
 
+## Resume A Failed Batch
+
+Use `--resume` with `--batch-id` to call the resume endpoint before polling:
+
+```bash
+uv run python test_client/client.py --batch-id f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2 --resume
+```
+
+Expected flow when the batch is failed and can be requeued:
+
+```text
+[health] {'message': 'Hello World'}
+
+[resuming] batch_id=f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2
+[resume] Batch resume accepted
+
+[polling] batch_id=f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2
+  [accepted] processed=0/5 failed=0
+  [processing] processed=2/5 failed=0
+  [completed] processed=5/5 failed=0
+```
+
+If the batch is already `completed`, the resume endpoint returns success and the client still polls the final progress state. If the batch is currently `accepted`, `processing`, or `cooldown`, the client prints an error because active batches cannot be resumed.
+
 ## Print Raw Final JSON
 
 Use `--json` to print the final progress response after polling completes:
@@ -150,6 +175,28 @@ Example completed response:
   "failed_hospitals": 0,
   "batch_activated": true,
   "error_message": null
+}
+```
+
+## Resume With Curl
+
+```bash
+curl -X POST https://hospital-bulk-processor-6466.onrender.com/hospitals/batch/{batch_id}/resume
+```
+
+Local example:
+
+```bash
+curl -X POST http://localhost:8000/hospitals/batch/{batch_id}/resume
+```
+
+Successful resume of a failed batch returns:
+
+```json
+{
+  "batch_id": "f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2",
+  "status": "accepted",
+  "message": "Batch resume accepted"
 }
 ```
 

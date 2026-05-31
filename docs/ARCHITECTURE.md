@@ -40,10 +40,11 @@ Activated hospital records
 
 ## API Layer
 
-The API layer exposes three endpoints:
+The API layer exposes four endpoints:
 
 - `GET /`: simple health check.
 - `POST /hospitals/bulk`: accepts a CSV file, validates it, creates a `batch_id`, stores initial progress, enqueues the job, and returns `202 Accepted`.
+- `POST /hospitals/batch/{batch_id}/resume`: checks the in-memory state and requeues saved hospital rows when the batch is `failed`.
 - `GET /hospitals/batch/{batch_id}/progress`: returns the current batch state from the in-memory store.
 
 The upload endpoint is rate limited to `10/minute` per remote address through `slowapi`.
@@ -63,6 +64,8 @@ For each queued batch, the worker:
 Only one worker loop is defined, so batch processing is serialized inside the process.
 
 The performance-optimized worker does not store per-hospital results. It tracks aggregate progress through `processed_hospitals`, `failed_hospitals`, `status`, `batch_activated`, and `error_message`.
+
+The API also keeps the parsed hospital payload in memory by `batch_id` so failed batches can be requeued by the resume endpoint. Like progress state, this payload is not durable across process restarts.
 
 ## Resilience
 

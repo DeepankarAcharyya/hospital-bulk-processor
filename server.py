@@ -32,6 +32,7 @@ api_lock       = asyncio.Lock()
 create_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
 activate_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30.0)
 store          = InMemoryStore()
+batch_payloads: dict[str, list] = {}
 
 async def process_batch_job(
     batch_id: str,
@@ -181,14 +182,59 @@ async def bulk_create_hospitals(request: Request, file: UploadFile = File(...)):
         status=BatchStatus.ACCEPTED,
         total_hospitals=len(hospitals),
     ))
+    batch_payloads[batch_id] = hospitals
     await job_queue.put((batch_id, hospitals))
     log.info("batch_enqueued", batch_id=batch_id, total=len(hospitals))
 
     return {"batch_id": batch_id}
 
 
+@app.post("/hospitals/batch/{batch_id}/resume")
+@limiter.limit("20/minute")
+async def resume_batch(request: Request, batch_id: str):
+    state = store.get(batch_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    if state.status == BatchStatus.COMPLETED:
+        return {
+            "batch_id": batch_id,
+            "status": state.status,
+            "message": "Batch already completed",
+        }
+
+    if state.status != BatchStatus.FAILED:
+        raise HTTPException(status_code=409, detail="Only failed batches can be resumed")
+
+    hospitals = batch_payloads.get(batch_id)
+    if hospitals is None:
+        raise HTTPException(status_code=404, detail="Batch payload not found")
+
+    store.update(
+        batch_id,
+        status=BatchStatus.ACCEPTED,
+        total_hospitals=len(hospitals),
+        processed_hospitals=0,
+        failed_hospitals=0,
+        batch_activated=False,
+        error_message=None,
+    )
+    await job_queue.put((batch_id, hospitals))
+    log.info("batch_resume_enqueued", batch_id=batch_id, total=len(hospitals))
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "batch_id": batch_id,
+            "status": BatchStatus.ACCEPTED,
+            "message": "Batch resume accepted",
+        },
+    )
+
+
 @app.get("/hospitals/batch/{batch_id}/progress")
-async def get_batch_progress(batch_id: str):
+@limiter.limit("60/minute")
+async def get_batch_progress(request: Request, batch_id: str):
     state = store.get(batch_id)
     if state is None:
         raise HTTPException(status_code=404, detail="Batch not found")
