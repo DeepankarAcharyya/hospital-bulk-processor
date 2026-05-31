@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from internal.models.batch import BatchState, BatchStatus
+from internal.models.bulk_response import HospitalResult
 from internal.store.in_memory import InMemoryStore
 
 
@@ -51,3 +52,31 @@ def test_get_returns_independent_copy():
     result.status = BatchStatus.FAILED  # mutate the returned copy
     # stored state should be unchanged
     assert store.get("batch-1").status == BatchStatus.ACCEPTED
+
+
+def test_get_returns_independent_hospital_result_list():
+    store = InMemoryStore()
+    store.set(
+        "batch-1",
+        BatchState(
+            batch_id="batch-1",
+            status=BatchStatus.ACCEPTED,
+            total_hospitals=1,
+            hospitals=[
+                HospitalResult(
+                    row=1,
+                    hospital_id=None,
+                    name="General Hospital",
+                    address="1 Main St",
+                    phone="555-0001",
+                    status="accepted",
+                )
+            ],
+        ),
+    )
+
+    result = store.get("batch-1")
+    result.hospitals[0].status = "failed"
+
+    assert store.get("batch-1").hospitals[0].status == "accepted"
+    assert store.get("batch-1").hospitals[0].address == "1 Main St"

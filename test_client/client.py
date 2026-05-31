@@ -42,7 +42,7 @@ def bulk_upload(client: httpx.Client, csv_path: Path) -> str:
 
 def poll_progress(client: httpx.Client, batch_id: str, poll_interval: float = 2.0) -> dict:
     """Poll GET /hospitals/batch/{batch_id}/progress until terminal state."""
-    terminal = {"completed", "failed"}
+    terminal = {"created_and_activated", "failed"}
     while True:
         resp = client.get(f"/hospitals/batch/{batch_id}/progress")
         if resp.status_code == 404:
@@ -52,7 +52,12 @@ def poll_progress(client: httpx.Client, batch_id: str, poll_interval: float = 2.
         data = resp.json()
         status = data["status"]
         suffix = " (circuit breaker cooling down)" if status == "cooldown" else ""
-        print(f"  [{status}]{suffix} processed={data['processed_hospitals']}/{data['total_hospitals']} failed={data['failed_hospitals']}")
+        print(
+            f"  [{status}]{suffix} "
+            f"processed={data['processed_hospitals']}/{data['total_hospitals']} "
+            f"failed={data['failed_hospitals']} "
+            f"elapsed={data['processing_time_seconds']}s"
+        )
         if status in terminal:
             return data
         time.sleep(poll_interval)
@@ -83,7 +88,16 @@ def print_results(data: dict) -> None:
     print(f"total_hospitals   : {data['total_hospitals']}")
     print(f"processed         : {data['processed_hospitals']}")
     print(f"failed            : {data['failed_hospitals']}")
+    print(f"processing_time_seconds : {data['processing_time_seconds']}")
     print(f"batch_activated   : {data['batch_activated']}")
+    if data.get("hospitals"):
+        print("hospitals         :")
+        for hospital in data["hospitals"]:
+            hospital_id = hospital["hospital_id"] if hospital["hospital_id"] is not None else "-"
+            print(
+                f"  row={hospital['row']} id={hospital_id} "
+                f"name={hospital['name']} status={hospital['status']}"
+            )
     if data.get("error_message"):
         print(f"error             : {data['error_message']}")
     print(f"{'='*50}\n")

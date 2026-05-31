@@ -111,7 +111,7 @@ Upload sample CSV:
 uv run python test_client/client.py
 ```
 
-The client should print an accepted `batch_id`, poll progress, and end with either `completed` or `failed`.
+The client should print an accepted `batch_id`, poll progress, and end with either `created_and_activated` or `failed`.
 
 Resume a failed batch by ID:
 

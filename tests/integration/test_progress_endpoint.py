@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from internal.models.batch import BatchState, BatchStatus
+from internal.models.bulk_response import HospitalResult
 
 
 def test_bulk_returns_202_with_batch_id(client):
@@ -22,9 +23,40 @@ def test_progress_returns_404_for_unknown_batch(client):
 def test_progress_returns_state_for_known_batch(client):
     from server import store
     unique_id = str(uuid4())
-    store.set(unique_id, BatchState(batch_id=unique_id, status=BatchStatus.PROCESSING, total_hospitals=5))
+    store.set(
+        unique_id,
+        BatchState(
+            batch_id=unique_id,
+            status=BatchStatus.CREATED,
+            total_hospitals=1,
+            processed_hospitals=1,
+            processing_time_seconds=12.5,
+            hospitals=[
+                HospitalResult(
+                    row=1,
+                    hospital_id=101,
+                    name="General Hospital",
+                    address="1 Main St",
+                    phone="555-0001",
+                    status="created",
+                )
+            ],
+        ),
+    )
     response = client.get(f"/hospitals/batch/{unique_id}/progress")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "processing"
-    assert data["total_hospitals"] == 5
+    assert data["status"] == "created"
+    assert data["total_hospitals"] == 1
+    assert data["processed_hospitals"] == 1
+    assert data["processing_time_seconds"] == 12.5
+    assert data["hospitals"] == [
+        {
+            "row": 1,
+            "hospital_id": 101,
+            "name": "General Hospital",
+            "status": "created",
+        }
+    ]
+    assert "address" not in data["hospitals"][0]
+    assert "phone" not in data["hospitals"][0]

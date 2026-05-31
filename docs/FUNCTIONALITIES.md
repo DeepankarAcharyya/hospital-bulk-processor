@@ -53,10 +53,16 @@ The progress response includes:
 - `total_hospitals`
 - `processed_hospitals`
 - `failed_hospitals`
+- `processing_time_seconds`
 - `batch_activated`
+- `hospitals`
 - `error_message`
 
-The current progress API reports aggregate batch state. It does not return one result object per hospital row.
+The current progress API reports aggregate batch state and one result object per hospital row. Public row results include `row`, `hospital_id`, `name`, and row-level `status`.
+
+`processing_time_seconds` is the last elapsed worker time saved in the in-memory store. It starts at `0` for newly accepted or resumed batches, advances as the worker updates progress, and is returned as stored by the progress endpoint.
+
+The in-memory store also keeps each row's raw `address` and `phone` values so failed batches can be resumed, but those raw fields are excluded from API responses.
 
 ## Resume Failed Batches
 
@@ -70,7 +76,7 @@ If the batch is `completed`, the endpoint returns `200 OK` with a success messag
 
 If the batch is `failed`, the endpoint resets aggregate progress, requeues the saved parsed hospital rows, and returns `202 Accepted`.
 
-Unknown batch IDs return `404 Not Found`. Batches that are already `accepted`, `processing`, or `cooldown` return `409 Conflict`.
+Unknown batch IDs return `404 Not Found`. Batches that are already `accepted`, `processing`, `created`, or `cooldown` return `409 Conflict`.
 
 ## Upstream Hospital Creation
 
@@ -84,7 +90,7 @@ Worker row numbers start at `1` in logs and error messages so they read as human
 
 The service adds the same `creation_batch_id` to every row in a batch so the upstream service can group the records.
 
-The worker reads the upstream create response for logging and status validation, but progress state is updated with counters rather than stored per-row payloads.
+The worker reads the upstream create response for logging, status validation, and row result updates. Created rows store the upstream `hospital_id`; after activation succeeds, created rows are marked `created_and_activated`.
 
 ## Batch Activation
 
@@ -155,6 +161,6 @@ The container runs FastAPI through Uvicorn on port `8000`.
 
 The `test_client/client.py` script demonstrates how to upload `test_client/hospitals.csv` to either the deployed service or a local service.
 
-The client uploads the CSV, receives a `batch_id`, polls the progress endpoint until the batch reaches `completed` or `failed`, and then prints the final batch state. It can also poll an existing batch through `--batch-id`, or resume a failed batch with `--batch-id <id> --resume`.
+The client uploads the CSV, receives a `batch_id`, polls the progress endpoint until the batch reaches `created_and_activated` or `failed`, and then prints the final batch state. It can also poll an existing batch through `--batch-id`, or resume a failed batch with `--batch-id <id> --resume`.
 
 See [Sample Client Program](SAMPLE_CLIENT.md).

@@ -23,7 +23,7 @@ https://hospital-directory.onrender.com
 - Retries transient upstream failures with backoff.
 - Uses circuit breakers for create and activation calls.
 - Exposes batch progress at `GET /hospitals/batch/{batch_id}/progress`.
-- Tracks aggregate batch progress instead of returning per-row results.
+- Tracks aggregate batch progress plus per-row hospital results.
 - Activates the upstream batch only after all rows are created successfully.
 - Includes a sample client that can upload new CSVs, poll an existing batch ID, or resume a failed batch.
 
@@ -56,11 +56,26 @@ Example accepted response:
 
 ```json
 {
-  "batch_id": "f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2"
+  "batch_id": "f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2",
+  "status": "accepted",
+  "total_hospitals": 2,
+  "processed_hospitals": 0,
+  "failed_hospitals": 0,
+  "processing_time_seconds": 0,
+  "batch_activated": false,
+  "hospitals": [
+    {
+      "row": 1,
+      "hospital_id": null,
+      "name": "General Hospital",
+      "status": "accepted"
+    }
+  ],
+  "error_message": null
 }
 ```
 
-The endpoint returns `202 Accepted` when the CSV is valid and the batch is queued.
+The endpoint returns `202 Accepted` when the CSV is valid and the batch is queued. The response uses the same batch state shape as the progress endpoint. At this point `processing_time_seconds` is `0` because the worker has not started recording elapsed processing time yet.
 
 ### Resume Failed Batch
 
@@ -89,17 +104,29 @@ Example response:
   "total_hospitals": 5,
   "processed_hospitals": 3,
   "failed_hospitals": 0,
+  "processing_time_seconds": 42.7,
   "batch_activated": false,
+  "hospitals": [
+    {
+      "row": 1,
+      "hospital_id": 101,
+      "name": "General Hospital",
+      "status": "created"
+    }
+  ],
   "error_message": null
 }
 ```
+
+`processing_time_seconds` is the last elapsed worker time saved in `InMemoryStore`. It starts at `0`, is updated while the worker processes rows and activation, and is reset to `0` when a failed batch is accepted for resume. The progress endpoint returns the stored value; it does not recalculate a live timer during the HTTP request.
 
 Possible statuses:
 
 - `accepted`
 - `processing`
+- `created`
 - `cooldown`
-- `completed`
+- `created_and_activated`
 - `failed`
 
 ## CSV Format
