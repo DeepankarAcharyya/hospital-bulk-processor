@@ -1,5 +1,6 @@
 import pytest
 import httpx
+from unittest.mock import patch
 from internal.clients.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 
@@ -67,9 +68,6 @@ class TestCircuitBreakerClosed:
                         response=httpx.Response(429),
                     )
         assert breaker.state == "open"
-
-
-from unittest.mock import patch
 
 
 class TestCircuitBreakerOpen:

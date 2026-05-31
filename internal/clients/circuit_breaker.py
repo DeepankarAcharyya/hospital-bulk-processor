@@ -43,7 +43,8 @@ class CircuitBreaker:
 
     async def __aenter__(self) -> None:
         if self._state == _State.OPEN:
-            elapsed = time.monotonic() - (self._last_failure_time or 0.0)
+            assert self._last_failure_time is not None
+            elapsed = time.monotonic() - self._last_failure_time
             if elapsed >= self._recovery_timeout:
                 self._state = _State.HALF_OPEN
             else:
