@@ -6,7 +6,7 @@ class InMemoryStore:
         self._data: dict[str, BatchState] = {}
 
     def set(self, batch_id: str, state: BatchState) -> None:
-        self._data[batch_id] = state
+        self._data[batch_id] = state.model_copy()
 
     def get(self, batch_id: str) -> BatchState | None:
         state = self._data.get(batch_id)

@@ -40,7 +40,7 @@ def test_update_unknown_key_raises():
 def test_update_unknown_field_raises():
     store = InMemoryStore()
     store.set("batch-1", _state())
-    with pytest.raises((KeyError, ValidationError, TypeError, ValueError)):
+    with pytest.raises(ValidationError):
         store.update("batch-1", nonexistent_field="bad")
 
 
