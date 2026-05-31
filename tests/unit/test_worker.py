@@ -52,6 +52,7 @@ async def test_row_failure_exhausts_retries_marks_failed(respx_mock):
     state = store.get(bid)
     assert state.failed_hospitals == 1
     assert state.batch_activated is False
+    assert state.status == BatchStatus.FAILED
 
 
 @respx.mock

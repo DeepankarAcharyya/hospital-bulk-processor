@@ -125,6 +125,10 @@ async def process_batch_job(
                 log.error("batch_activation_failed", batch_id=batch_id)
                 store.update(batch_id, status=BatchStatus.FAILED, error_message="Activation HTTP error")
                 return
+            except httpx.TransportError:
+                log.error("activate_transport_error", batch_id=batch_id)
+                store.update(batch_id, status=BatchStatus.FAILED, error_message="Activation transport error")
+                return
 
     final_status = BatchStatus.COMPLETED if failed == 0 else BatchStatus.FAILED
     store.update(batch_id, status=final_status, batch_activated=batch_activated)
