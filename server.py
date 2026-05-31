@@ -16,7 +16,7 @@ from internal.clients.circuit_breaker import CircuitBreaker, CircuitOpenError
 from internal.clients.hospital_client import create_hospital, activate_batch
 from internal.logging_config import configure_logging
 from internal.models.batch import BatchState, BatchStatus
-from internal.models.bulk_response import BulkCreateResponse, HospitalResult
+from internal.models.bulk_response import HospitalResult
 from internal.store.in_memory import InMemoryStore
 from internal.validation.csv import parse_and_validate_csv, CSVValidationError
 

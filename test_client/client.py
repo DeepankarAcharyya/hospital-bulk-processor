@@ -8,7 +8,8 @@ from pathlib import Path
 
 import httpx
 
-BASE_URL = "http://localhost:8000"
+# BASE_URL = "http://localhost:8000"
+BASE_URL = "https://hospital-bulk-processor-6466.onrender.com"
 
 
 def check_health(client: httpx.Client) -> None:
