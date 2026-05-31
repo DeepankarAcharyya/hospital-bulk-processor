@@ -23,7 +23,9 @@ https://hospital-directory.onrender.com
 - Retries transient upstream failures with backoff.
 - Uses circuit breakers for create and activation calls.
 - Exposes batch progress at `GET /hospitals/batch/{batch_id}/progress`.
+- Tracks aggregate batch progress instead of returning per-row results.
 - Activates the upstream batch only after all rows are created successfully.
+- Includes a sample client that can upload new CSVs or poll an existing batch ID.
 
 ## API Summary
 

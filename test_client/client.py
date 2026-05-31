@@ -40,15 +40,19 @@ def bulk_upload(client: httpx.Client, csv_path: Path) -> str:
     return data["batch_id"]
 
 
-def poll_progress(client: httpx.Client, batch_id: str, poll_interval: float = 1.0) -> dict:
+def poll_progress(client: httpx.Client, batch_id: str, poll_interval: float = 2.0) -> dict:
     """Poll GET /hospitals/batch/{batch_id}/progress until terminal state."""
     terminal = {"completed", "failed"}
     while True:
         resp = client.get(f"/hospitals/batch/{batch_id}/progress")
+        if resp.status_code == 404:
+            print(f"[error] batch_id={batch_id} not found")
+            sys.exit(1)
         resp.raise_for_status()
         data = resp.json()
         status = data["status"]
-        print(f"  [{status}] processed={data['processed_hospitals']}/{data['total_hospitals']} failed={data['failed_hospitals']}")
+        suffix = " (circuit breaker cooling down)" if status == "cooldown" else ""
+        print(f"  [{status}]{suffix} processed={data['processed_hospitals']}/{data['total_hospitals']} failed={data['failed_hospitals']}")
         if status in terminal:
             return data
         time.sleep(poll_interval)
@@ -76,21 +80,35 @@ def main():
         type=Path,
         help="Path to CSV file (default: hospitals.csv in this directory)",
     )
+    parser.add_argument(
+        "--batch-id",
+        help="Poll an existing batch by ID (skips upload)",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=2.0,
+        help="Seconds between progress polls (default: 2.0)",
+    )
     parser.add_argument("--json", action="store_true", help="Print raw JSON response")
     args = parser.parse_args()
-
-    if not args.csv.exists():
-        print(f"[error] CSV not found: {args.csv}")
-        sys.exit(1)
 
     with httpx.Client(base_url=args.url) as client:
         check_health(client)
 
-        print(f"\n[uploading] {args.csv} → {args.url}/hospitals/bulk")
-        batch_id = bulk_upload(client, args.csv)
-        print(f"[accepted] batch_id={batch_id}\n[polling]")
+        if args.batch_id:
+            print(f"\n[polling] batch_id={args.batch_id}")
+            data = poll_progress(client, args.batch_id, poll_interval=args.poll_interval)
+        else:
+            if not args.csv.exists():
+                print(f"[error] CSV not found: {args.csv}")
+                sys.exit(1)
 
-        data = poll_progress(client, batch_id)
+            print(f"\n[uploading] {args.csv} → {args.url}/hospitals/bulk")
+            batch_id = bulk_upload(client, args.csv)
+            print(f"[accepted] batch_id={batch_id}\n[polling]")
+
+            data = poll_progress(client, batch_id, poll_interval=args.poll_interval)
 
         if args.json:
             print(json.dumps(data, indent=2))

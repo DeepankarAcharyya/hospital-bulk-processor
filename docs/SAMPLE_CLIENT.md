@@ -6,7 +6,7 @@ The repository includes a simple Python client:
 test_client/client.py
 ```
 
-It uploads a CSV file to the bulk processor API using `httpx`.
+It uploads a CSV file to the bulk processor API using `httpx`, then polls the progress endpoint until the batch reaches a terminal state.
 
 ## Default Target
 
@@ -17,6 +17,16 @@ https://hospital-bulk-processor-6466.onrender.com
 ```
 
 To target a local server, pass `--url`.
+
+## Client Options
+
+| Option | Purpose |
+| --- | --- |
+| `--url` | Override the API base URL. |
+| `--csv` | Upload a custom CSV file. |
+| `--batch-id` | Poll an existing batch without uploading a new CSV. |
+| `--poll-interval` | Set seconds between progress polls. Default: `2.0`. |
+| `--json` | Print the final progress response as JSON. |
 
 ## Sample CSV
 
@@ -37,10 +47,23 @@ Riverside Medical Center,456 Oak Ave Portland OR 97201,555-100-1002
 ## Run Against Deployed Service
 
 ```bash
-uv run python test_client/client.py --json
+uv run python test_client/client.py
 ```
 
-Expected accepted response:
+Expected flow:
+
+```text
+[health] {'message': 'Hello World'}
+
+[uploading] test_client/hospitals.csv -> https://hospital-bulk-processor-6466.onrender.com/hospitals/bulk
+[accepted] batch_id=f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2
+[polling]
+  [accepted] processed=0/5 failed=0
+  [processing] processed=3/5 failed=0
+  [completed] processed=5/5 failed=0
+```
+
+The upload response contains only the `batch_id`:
 
 ```json
 {
@@ -48,7 +71,11 @@ Expected accepted response:
 }
 ```
 
-The API is asynchronous, so this response means the batch was accepted and queued. Use the returned `batch_id` to check progress.
+The sample client handles that automatically by polling:
+
+```http
+GET /hospitals/batch/{batch_id}/progress
+```
 
 ## Run Against Local Service
 
@@ -61,19 +88,41 @@ HOSPITALS_API_URL=https://hospital-directory.onrender.com uv run uvicorn server:
 Upload the sample CSV:
 
 ```bash
-uv run python test_client/client.py --url http://localhost:8000 --json
+uv run python test_client/client.py --url http://localhost:8000
 ```
 
 ## Use A Custom CSV
 
 ```bash
-uv run python test_client/client.py --csv path/to/hospitals.csv --json
+uv run python test_client/client.py --csv path/to/hospitals.csv
 ```
 
 With a local target:
 
 ```bash
-uv run python test_client/client.py --url http://localhost:8000 --csv path/to/hospitals.csv --json
+uv run python test_client/client.py --url http://localhost:8000 --csv path/to/hospitals.csv
+```
+
+## Poll An Existing Batch
+
+Use `--batch-id` to skip upload and poll a batch that was already accepted:
+
+```bash
+uv run python test_client/client.py --batch-id f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2
+```
+
+With a custom polling interval:
+
+```bash
+uv run python test_client/client.py --batch-id f8b38c3e-2f08-48c8-8f7d-b7a0800d00c2 --poll-interval 5
+```
+
+## Print Raw Final JSON
+
+Use `--json` to print the final progress response after polling completes:
+
+```bash
+uv run python test_client/client.py --json
 ```
 
 ## Poll Progress
@@ -115,6 +164,11 @@ Example:
   row 0: Missing columns: {'name'}
 ```
 
-## Current Client Note
+## Polling Behavior
 
-Because the API now returns `202 Accepted` immediately, use `--json` when running the sample client. Progress details are available from the progress endpoint.
+The client polls every `2` seconds by default. It stops when the batch status is either:
+
+- `completed`
+- `failed`
+
+If the service reports `cooldown`, the client keeps polling and annotates the line as circuit breaker cooldown.

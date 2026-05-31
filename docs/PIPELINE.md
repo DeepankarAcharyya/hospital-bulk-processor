@@ -96,6 +96,8 @@ After each row, the worker updates:
 - `failed_hospitals`
 - `status`
 
+The worker does not store per-row result objects in the progress response. Progress is intentionally aggregate-only.
+
 ## 5. Retry And Cooldown Behavior
 
 The worker retries transient create failures up to six attempts per row.
@@ -127,6 +129,8 @@ In that case:
 3. Processing stops.
 4. Later rows are not attempted.
 5. Batch activation is skipped.
+
+If a row exhausts all retry attempts for transient failures, that row increments `failed_hospitals`. The worker continues processing later rows, but batch activation is skipped because the batch has failures.
 
 ## 7. Batch Activation
 

@@ -31,7 +31,7 @@ Activated hospital records
 - `internal/validation/csv.py`: CSV parsing, header validation, row validation, and maximum row enforcement.
 - `internal/models/hospital.py`: Pydantic model for hospital records.
 - `internal/models/batch.py`: Batch status and progress state model.
-- `internal/models/bulk_response.py`: Per-hospital result models used by the worker.
+- `internal/models/bulk_response.py`: Legacy response/result models returned by the hospital client helper. The current worker does not retain per-row result objects in batch state.
 - `internal/clients/hospital_client.py`: HTTP client helpers for the upstream hospital API.
 - `internal/clients/circuit_breaker.py`: Circuit breaker implementation for transient downstream failures.
 - `internal/store/in_memory.py`: In-memory batch progress store.
@@ -56,11 +56,13 @@ For each queued batch, the worker:
 
 1. Marks the batch as `processing`.
 2. Creates each hospital through the upstream API.
-3. Updates progress after each row.
+3. Updates aggregate progress counters after each row.
 4. Activates the upstream batch if all creates succeed.
 5. Marks the batch as `completed` or `failed`.
 
 Only one worker loop is defined, so batch processing is serialized inside the process.
+
+The performance-optimized worker does not store per-hospital results. It tracks aggregate progress through `processed_hospitals`, `failed_hospitals`, `status`, `batch_activated`, and `error_message`.
 
 ## Resilience
 

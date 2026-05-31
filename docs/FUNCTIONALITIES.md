@@ -56,6 +56,8 @@ The progress response includes:
 - `batch_activated`
 - `error_message`
 
+The current progress API reports aggregate batch state. It does not return one result object per hospital row.
+
 ## Upstream Hospital Creation
 
 Each CSV row is sent to the configured upstream hospital directory API:
@@ -65,6 +67,8 @@ POST /hospitals/
 ```
 
 The service adds the same `creation_batch_id` to every row in a batch so the upstream service can group the records.
+
+The worker reads the upstream create response for logging and status validation, but progress state is updated with counters rather than stored per-row payloads.
 
 ## Batch Activation
 
@@ -134,5 +138,7 @@ The container runs FastAPI through Uvicorn on port `8000`.
 ## Sample Client
 
 The `test_client/client.py` script demonstrates how to upload `test_client/hospitals.csv` to either the deployed service or a local service.
+
+The client uploads the CSV, receives a `batch_id`, polls the progress endpoint until the batch reaches `completed` or `failed`, and then prints the final batch state. It can also poll an existing batch through `--batch-id`.
 
 See [Sample Client Program](SAMPLE_CLIENT.md).

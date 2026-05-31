@@ -108,7 +108,7 @@ Expected response:
 Upload sample CSV:
 
 ```bash
-uv run python test_client/client.py --json
+uv run python test_client/client.py
 ```
 
-The upload response should contain a `batch_id`.
+The client should print an accepted `batch_id`, poll progress, and end with either `completed` or `failed`.
