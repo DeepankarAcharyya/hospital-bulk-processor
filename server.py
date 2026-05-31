@@ -1,6 +1,8 @@
+import asyncio
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 import httpx
 import structlog
@@ -10,9 +12,11 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from internal.clients.circuit_breaker import CircuitBreaker, CircuitOpenError
 from internal.clients.hospital_client import create_hospital, activate_batch
 from internal.logging_config import configure_logging
-from internal.models.bulk_response import BulkCreateResponse, HospitalResult
+from internal.models.batch import BatchState, BatchStatus
+from internal.store.in_memory import InMemoryStore
 from internal.validation.csv import parse_and_validate_csv, CSVValidationError
 
 configure_logging()
@@ -23,7 +27,115 @@ HOSPITALS_API_URL = os.environ["HOSPITALS_API_URL"]
 
 limiter = Limiter(key_func=get_remote_address)
 
-app = FastAPI()
+job_queue      = asyncio.Queue()
+api_lock       = asyncio.Lock()
+create_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
+activate_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30.0)
+store          = InMemoryStore()
+batch_payloads: dict[str, list] = {}
+
+async def process_batch_job(
+    batch_id: str,
+    hospitals: list,
+    store: InMemoryStore,
+    create_breaker: CircuitBreaker,
+    activate_breaker: CircuitBreaker,
+    api_lock: asyncio.Lock,
+) -> None:
+    store.update(batch_id, status=BatchStatus.PROCESSING)
+    failed = 0
+
+    async with httpx.AsyncClient(base_url=HOSPITALS_API_URL, timeout=30.0) as client:
+        for row, hospital in enumerate(hospitals, start=1):
+            attempt = 0
+            success = False
+            while attempt < 6:
+                try:
+                    async with create_breaker:
+                        async with api_lock:
+                            await create_hospital(client, hospital, uuid.UUID(batch_id), row)
+                    success = True
+                    break
+                except CircuitOpenError as e:
+                    store.update(batch_id, status=BatchStatus.COOLDOWN)
+                    log.warning("create_circuit_open", batch_id=batch_id, row=row, attempt=attempt, retry_after=e.retry_after)
+                    await asyncio.sleep(e.retry_after)
+                    attempt += 1
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code in (400, 422):
+                        log.error("create_fatal_data_error", batch_id=batch_id, row=row, status_code=e.response.status_code)
+                        store.update(batch_id, status=BatchStatus.FAILED,
+                                    error_message=f"Row {row}: fatal {e.response.status_code}")
+                        return
+                    backoff = min(60.0, 2.0 ** attempt)
+                    log.warning("create_transient_retry", batch_id=batch_id, row=row, attempt=attempt, backoff=backoff, status_code=e.response.status_code)
+                    await asyncio.sleep(backoff)
+                    attempt += 1
+                except httpx.TransportError as e:
+                    backoff = min(60.0, 2.0 ** attempt)
+                    log.warning("create_transport_retry", batch_id=batch_id, row=row, attempt=attempt, backoff=backoff, error=repr(e))
+                    await asyncio.sleep(backoff)
+                    attempt += 1
+
+            if not success:
+                failed += 1
+                log.error("create_exhausted_retries", batch_id=batch_id, row=row, name=hospital.name)
+
+            store.update(
+                batch_id,
+                status=BatchStatus.PROCESSING,
+                processed_hospitals=row - failed,
+                failed_hospitals=failed,
+            )
+
+        batch_activated = False
+        if failed == 0:
+            try:
+                async with activate_breaker:
+                    async with api_lock:
+                        batch_activated = await activate_batch(client, uuid.UUID(batch_id))
+            except CircuitOpenError as e:
+                log.error("activate_circuit_open", batch_id=batch_id, retry_after=e.retry_after)
+                store.update(batch_id, status=BatchStatus.FAILED, error_message="Activation circuit open")
+                return
+            except httpx.HTTPStatusError:
+                log.error("batch_activation_failed", batch_id=batch_id)
+                store.update(batch_id, status=BatchStatus.FAILED, error_message="Activation HTTP error")
+                return
+            except httpx.TransportError:
+                log.error("activate_transport_error", batch_id=batch_id)
+                store.update(batch_id, status=BatchStatus.FAILED, error_message="Activation transport error")
+                return
+
+    final_status = BatchStatus.COMPLETED if failed == 0 else BatchStatus.FAILED
+    store.update(batch_id, status=final_status, batch_activated=batch_activated)
+    log.info("batch_complete", batch_id=batch_id, failed=failed, activated=batch_activated)
+
+
+async def _worker_loop() -> None:
+    while True:
+        batch_id, hospitals = await job_queue.get()
+        try:
+            await process_batch_job(batch_id, hospitals, store, create_breaker, activate_breaker, api_lock)
+        except Exception as exc:
+            log.error("worker_unhandled_error", batch_id=batch_id, error=repr(exc))
+            try:
+                store.update(batch_id, status=BatchStatus.FAILED, error_message=repr(exc))
+            except KeyError:
+                pass
+        finally:
+            job_queue.task_done()
+
+
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    task = asyncio.create_task(_worker_loop())
+    yield
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+app = FastAPI(lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -49,10 +161,9 @@ async def root():
     return {"message": "Hello World"}
 
 
-@app.post("/hospitals/bulk", response_model=BulkCreateResponse)
+@app.post("/hospitals/bulk", status_code=202)
 @limiter.limit("10/minute")
 async def bulk_create_hospitals(request: Request, file: UploadFile = File(...)):
-    # Validate content type before reading to avoid unnecessary processing
     if file.content_type not in ("text/csv", "application/csv"):
         log.warning("invalid_content_type", content_type=file.content_type)
         raise HTTPException(status_code=400, detail="File must be a CSV")
@@ -65,59 +176,66 @@ async def bulk_create_hospitals(request: Request, file: UploadFile = File(...)):
         log.warning("csv_validation_failed", error_count=len(e.errors), errors=e.errors)
         return JSONResponse(status_code=422, content={"errors": e.errors})
 
-    batch_id = uuid.uuid4()
-    log.info("batch_started", batch_id=str(batch_id), total=len(hospitals))
-
-    start = time.perf_counter()
-    results: list[HospitalResult] = []
-    failed = 0
-
-    async with httpx.AsyncClient(base_url=HOSPITALS_API_URL, timeout=30.0) as client:
-        for row, hospital in enumerate(hospitals, start=1):
-            try:
-                result = await create_hospital(client, hospital, batch_id, row)
-                results.append(result)
-            except httpx.HTTPError as e:
-                failed += 1
-                log.error(
-                    "hospital_create_failed",
-                    row=row,
-                    name=hospital.name,
-                    error=repr(e),
-                )
-                results.append(HospitalResult(
-                    row=row,
-                    hospital_id=0,
-                    name=hospital.name,
-                    status="failed",
-                ))
-
-        batch_activated = False
-        if failed == 0:
-            try:
-                batch_activated = await activate_batch(client, batch_id)
-                # Mark all results as created_and_activated
-                results = [r.model_copy(update={"status": "created_and_activated"}) for r in results]
-            except httpx.HTTPStatusError:
-                log.error("batch_activation_failed", batch_id=str(batch_id))
-
-    processing_time = round(time.perf_counter() - start, 3)
-
-    log.info(
-        "batch_complete",
-        batch_id=str(batch_id),
-        processed=len(hospitals) - failed,
-        failed=failed,
-        activated=batch_activated,
-        processing_time_seconds=processing_time,
-    )
-
-    return BulkCreateResponse(
+    batch_id = str(uuid.uuid4())
+    store.set(batch_id, BatchState(
         batch_id=batch_id,
+        status=BatchStatus.ACCEPTED,
         total_hospitals=len(hospitals),
-        processed_hospitals=len(hospitals) - failed,
-        failed_hospitals=failed,
-        processing_time_seconds=processing_time,
-        batch_activated=batch_activated,
-        hospitals=results,
+    ))
+    batch_payloads[batch_id] = hospitals
+    await job_queue.put((batch_id, hospitals))
+    log.info("batch_enqueued", batch_id=batch_id, total=len(hospitals))
+
+    return {"batch_id": batch_id}
+
+
+@app.post("/hospitals/batch/{batch_id}/resume")
+@limiter.limit("20/minute")
+async def resume_batch(request: Request, batch_id: str):
+    state = store.get(batch_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    if state.status == BatchStatus.COMPLETED:
+        return {
+            "batch_id": batch_id,
+            "status": state.status,
+            "message": "Batch already completed",
+        }
+
+    if state.status != BatchStatus.FAILED:
+        raise HTTPException(status_code=409, detail="Only failed batches can be resumed")
+
+    hospitals = batch_payloads.get(batch_id)
+    if hospitals is None:
+        raise HTTPException(status_code=404, detail="Batch payload not found")
+
+    store.update(
+        batch_id,
+        status=BatchStatus.ACCEPTED,
+        total_hospitals=len(hospitals),
+        processed_hospitals=0,
+        failed_hospitals=0,
+        batch_activated=False,
+        error_message=None,
     )
+    await job_queue.put((batch_id, hospitals))
+    log.info("batch_resume_enqueued", batch_id=batch_id, total=len(hospitals))
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "batch_id": batch_id,
+            "status": BatchStatus.ACCEPTED,
+            "message": "Batch resume accepted",
+        },
+    )
+
+
+@app.get("/hospitals/batch/{batch_id}/progress")
+@limiter.limit("60/minute")
+async def get_batch_progress(request: Request, batch_id: str):
+    state = store.get(batch_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return state
