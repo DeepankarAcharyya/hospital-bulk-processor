@@ -1,6 +1,6 @@
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class BatchStatus(str, Enum):
@@ -12,6 +12,8 @@ class BatchStatus(str, Enum):
 
 
 class BatchState(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     batch_id: str
     status: BatchStatus
     total_hospitals: int

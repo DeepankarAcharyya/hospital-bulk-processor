@@ -9,8 +9,9 @@ class InMemoryStore:
         self._data[batch_id] = state
 
     def get(self, batch_id: str) -> BatchState | None:
-        return self._data.get(batch_id)
+        state = self._data.get(batch_id)
+        return state.model_copy() if state is not None else None
 
     def update(self, batch_id: str, **kwargs) -> None:
         state = self._data[batch_id]  # raises KeyError if missing
-        self._data[batch_id] = state.model_copy(update=kwargs)
+        self._data[batch_id] = BatchState.model_validate({**state.model_dump(), **kwargs})
