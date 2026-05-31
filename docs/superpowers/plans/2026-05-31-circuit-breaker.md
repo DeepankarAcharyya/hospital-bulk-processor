@@ -258,6 +258,30 @@ class TestCircuitBreakerClosed:
         with pytest.raises(httpx.ConnectError):
             async with breaker:
                 raise httpx.ConnectError("real error")
+
+    async def test_fatal_4xx_does_not_trip_circuit(self):
+        breaker = CircuitBreaker(failure_threshold=2, recovery_timeout=30.0)
+        for _ in range(3):  # more than threshold — still stays closed
+            with pytest.raises(httpx.HTTPStatusError):
+                async with breaker:
+                    raise httpx.HTTPStatusError(
+                        "400 Bad Request",
+                        request=httpx.Request("POST", "http://test"),
+                        response=httpx.Response(400),
+                    )
+        assert breaker.state == "closed"
+
+    async def test_transient_429_trips_circuit_at_threshold(self):
+        breaker = CircuitBreaker(failure_threshold=2, recovery_timeout=30.0)
+        for _ in range(2):
+            with pytest.raises(httpx.HTTPStatusError):
+                async with breaker:
+                    raise httpx.HTTPStatusError(
+                        "429 Too Many Requests",
+                        request=httpx.Request("POST", "http://test"),
+                        response=httpx.Response(429),
+                    )
+        assert breaker.state == "open"
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -292,6 +316,17 @@ class CircuitOpenError(Exception):
         super().__init__(f"Circuit open. Retry after {retry_after:.1f}s")
 
 
+_TRANSIENT_CODES: frozenset[int] = frozenset({429, 503})
+
+
+def _is_transient(exc_type: type, exc_val: BaseException) -> bool:
+    if issubclass(exc_type, httpx.TransportError):
+        return True
+    if issubclass(exc_type, httpx.HTTPStatusError):
+        return exc_val.response.status_code in _TRANSIENT_CODES
+    return False
+
+
 class CircuitBreaker:
     def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 60.0) -> None:
         self._failure_threshold = failure_threshold
@@ -308,7 +343,7 @@ class CircuitBreaker:
         return None
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
-        if exc_type is not None and issubclass(exc_type, httpx.HTTPError):
+        if exc_type is not None and _is_transient(exc_type, exc_val):
             self._failure_count += 1
             self._last_failure_time = time.monotonic()
             if self._failure_count >= self._failure_threshold:
@@ -323,7 +358,7 @@ pytest tests/unit/test_circuit_breaker.py::TestCircuitOpenError \
        tests/unit/test_circuit_breaker.py::TestCircuitBreakerClosed -v
 ```
 
-Expected: 5 tests PASS.
+Expected: 7 tests PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -498,6 +533,24 @@ class TestCircuitBreakerHalfOpen:
                 async with breaker:
                     raise httpx.ConnectError("still down")
         assert breaker.state == "open"
+
+    async def test_half_open_fatal_error_stays_half_open(self):
+        """Fatal errors don't change circuit state — circuit only tracks availability."""
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=30.0)
+        with patch("internal.clients.circuit_breaker.time") as mock_time:
+            mock_time.monotonic.return_value = 0.0
+            with pytest.raises(httpx.ConnectError):
+                async with breaker:
+                    raise httpx.ConnectError("down")
+            mock_time.monotonic.return_value = 31.0
+            with pytest.raises(httpx.HTTPStatusError):
+                async with breaker:
+                    raise httpx.HTTPStatusError(
+                        "422 Unprocessable",
+                        request=httpx.Request("POST", "http://test"),
+                        response=httpx.Response(422),
+                    )
+        assert breaker.state == "half_open"  # neither closed (no success) nor open (not transient)
 ```
 
 - [ ] **Step 2: Run new tests to verify they fail**
@@ -514,7 +567,7 @@ Replace `__aexit__` in `internal/clients/circuit_breaker.py`:
 
 ```python
 async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
-    if exc_type is not None and issubclass(exc_type, httpx.HTTPError):
+    if exc_type is not None and _is_transient(exc_type, exc_val):
         self._last_failure_time = time.monotonic()
         if self._state == _State.HALF_OPEN:
             self._state = _State.OPEN
@@ -635,6 +688,21 @@ async def test_retries_six_times_then_continues(respx_mock):
     state = store.get(bid)
     assert state.failed_hospitals == 1
     assert state.processed_hospitals == 1
+
+
+@respx.mock
+async def test_fatal_data_error_aborts_batch_immediately(respx_mock):
+    respx_mock.post("/hospitals/").mock(
+        return_value=httpx.Response(422, json={"detail": "Unprocessable Entity"})
+    )
+    store = InMemoryStore()
+    # Two hospitals — only first should be attempted; 422 aborts entire batch
+    hospitals = [_make_hospital("bad-data"), _make_hospital("also-bad")]
+    bid = await _run_worker_once(store, hospitals)
+    state = store.get(bid)
+    assert state.status == BatchStatus.FAILED
+    # Only 1 POST made — aborted immediately on first 422, row 2 never attempted
+    assert respx_mock.calls.call_count == 1
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -686,9 +754,19 @@ async def process_batch_job(
                     log.warning("create_circuit_open", batch_id=batch_id, row=row, attempt=attempt, retry_after=e.retry_after)
                     await asyncio.sleep(e.retry_after)
                     attempt += 1
-                except httpx.HTTPError as e:
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code in (400, 422):
+                        log.error("create_fatal_data_error", batch_id=batch_id, row=row, status_code=e.response.status_code)
+                        store.update(batch_id, status=BatchStatus.FAILED,
+                                    error_message=f"Row {row}: fatal {e.response.status_code}")
+                        return
                     backoff = min(60.0, 2.0 ** attempt)
-                    log.warning("create_failed_retry", batch_id=batch_id, row=row, attempt=attempt, backoff=backoff, error=repr(e))
+                    log.warning("create_transient_retry", batch_id=batch_id, row=row, attempt=attempt, backoff=backoff, status_code=e.response.status_code)
+                    await asyncio.sleep(backoff)
+                    attempt += 1
+                except httpx.TransportError as e:
+                    backoff = min(60.0, 2.0 ** attempt)
+                    log.warning("create_transport_retry", batch_id=batch_id, row=row, attempt=attempt, backoff=backoff, error=repr(e))
                     await asyncio.sleep(backoff)
                     attempt += 1
 
@@ -740,7 +818,7 @@ def batch_id_as_uuid(batch_id: str) -> _uuid_module.UUID:
 pytest tests/unit/test_worker.py -v
 ```
 
-Expected: all 3 tests PASS.
+Expected: all 4 tests PASS.
 
 - [ ] **Step 5: Run full test suite to check for regressions**
 

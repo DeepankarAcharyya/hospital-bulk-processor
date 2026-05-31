@@ -106,11 +106,19 @@ class CircuitBreaker:
     def state(self) -> str                  # "closed" | "open" | "half_open"
 ```
 
-`__aexit__` never suppresses exceptions. Only `httpx.HTTPError` subclasses count as failures.
+`__aexit__` never suppresses exceptions. Only **transient** errors count as circuit failures: `httpx.TransportError` (timeouts, connection refused) and `httpx.HTTPStatusError` with status `429` or `503`. Fatal data errors (`400`, `422`) pass through without tripping the circuit.
 
 ### 4. Background Worker — `server.py`
 
 Single long-running coroutine, launched via FastAPI `lifespan`. Pulls `BatchJob` from the queue and processes it.
+
+**Error Classification:**
+
+| Error Type | Status | Treatment |
+|------------|--------|-----------|
+| `httpx.TransportError` | timeout, connection refused | Transient — retry w/ backoff, trips circuit |
+| `httpx.HTTPStatusError` | 429, 503 | Transient — retry w/ backoff, trips circuit |
+| `httpx.HTTPStatusError` | 400, 422 | Fatal — abort batch immediately, no retry |
 
 **Per-row retry logic (max 6 attempts, exponential backoff):**
 
@@ -121,13 +129,22 @@ while attempt < 6:
         async with create_breaker:
             async with api_lock:
                 result = await create_hospital(client, hospital, batch_id, row)
-        # success: break
-        break
+        break  # success
     except CircuitOpenError as e:
         store.update(batch_id, status=BatchStatus.COOLDOWN)
         await asyncio.sleep(e.retry_after)
         attempt += 1
-    except httpx.HTTPError:
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (400, 422):
+            # fatal: bad data — abort entire batch immediately
+            store.update(batch_id, status=BatchStatus.FAILED,
+                        error_message=f"Row {row}: fatal {e.response.status_code}")
+            return
+        # transient (429, 503): retry with backoff
+        backoff = min(60.0, 2.0 ** attempt)
+        await asyncio.sleep(backoff)
+        attempt += 1
+    except httpx.TransportError:
         backoff = min(60.0, 2.0 ** attempt)   # 1, 2, 4, 8, 16, 32 s
         await asyncio.sleep(backoff)
         attempt += 1
@@ -177,11 +194,17 @@ All persist for the process lifetime (survive across requests). Worker is starte
 
 ## Resilience — Downstream Failure During Row Loop
 
-1. `httpx.HTTPError` on row N → exponential backoff (1s, 2s, 4s…), retry up to 6×
-2. After 6 failures: row marked failed, status → `cooldown`, continue to row N+1
+**Transient path (429, 503, transport errors):**
+1. Error on row N → exponential backoff (1s, 2s, 4s…), retry up to 6×; circuit counts failure
+2. After 6 failures: row marked failed, continue to row N+1
 3. If `failure_count >= threshold` (5): `create_breaker` trips to `OPEN`
-4. Subsequent rows get `CircuitOpenError` → sleep `retry_after`, then probe (HALF_OPEN)
+4. Subsequent rows get `CircuitOpenError` → `COOLDOWN` status, sleep `retry_after`, then probe (HALF_OPEN)
 5. If all rows fail: activation skipped, batch → `FAILED`
+
+**Fatal path (400, 422):**
+1. `httpx.HTTPStatusError` with 400/422 on any row → abort batch immediately
+2. Store → `FAILED` with `error_message`, return from worker
+3. No retry, no activation, circuit NOT tripped
 
 ---
 
@@ -201,6 +224,5 @@ Horizontal scaling would break `asyncio.Lock` (per-process). If needed later: re
 ## Out of Scope
 
 - Persistent queue across restarts
-- Per-status-code filtering (all `httpx.HTTPError` counts as failure)
 - Metrics/instrumentation hooks
 - Multiple concurrent workers
