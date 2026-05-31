@@ -27,6 +27,11 @@ HOSPITALS_API_URL = os.environ["HOSPITALS_API_URL"]
 
 limiter = Limiter(key_func=get_remote_address)
 
+job_queue      = asyncio.Queue()
+api_lock       = asyncio.Lock()
+create_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
+activate_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30.0)
+store          = InMemoryStore()
 
 async def process_batch_job(
     batch_id: str,
@@ -104,13 +109,6 @@ async def process_batch_job(
     final_status = BatchStatus.COMPLETED if failed == 0 else BatchStatus.FAILED
     store.update(batch_id, status=final_status, batch_activated=batch_activated)
     log.info("batch_complete", batch_id=batch_id, failed=failed, activated=batch_activated)
-
-
-job_queue      = asyncio.Queue()
-api_lock       = asyncio.Lock()
-create_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60.0)
-activate_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30.0)
-store          = InMemoryStore()
 
 
 async def _worker_loop() -> None:
